@@ -5,10 +5,12 @@ import {
   LineChart, Line, CartesianGrid,
 } from "recharts";
 
-const supabase = createClient(
-  import.meta.env.VITE_SUPABASE_URL,
-  import.meta.env.VITE_SUPABASE_ANON_KEY
-);
+// ─── Supabase 初始化（带环境变量保护）───
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const supabase = (SUPABASE_URL && SUPABASE_KEY)
+  ? createClient(SUPABASE_URL, SUPABASE_KEY)
+  : null;
 
 const CURRENT_YEAR = new Date().getFullYear();
 const WINDOW_SIZE = 5;
@@ -56,6 +58,23 @@ const defaultRow = () => ({
   rewards: DEFAULT_VAR_COSTS.map(r => ({ ...r })),
   fixedCosts: DEFAULT_FIXED_COSTS.map(f => ({ ...f })),
 });
+
+// ─── 读取数据库数据时与默认值合并，防止字段缺失 ───
+const mergeWithDefault = (saved) => {
+  if (!saved) return defaultRow();
+  return {
+    ...defaultRow(),
+    ...saved,
+    rewards: DEFAULT_VAR_COSTS.map((def) => {
+      const s = (saved.rewards || []).find(r => r.id === def.id);
+      return s ? { ...def, ...s } : { ...def };
+    }),
+    fixedCosts: DEFAULT_FIXED_COSTS.map((def) => {
+      const s = (saved.fixedCosts || []).find(f => f.id === def.id);
+      return s ? { ...def, ...s } : { ...def };
+    }),
+  };
+};
 
 const initYear = () => {
   const d = {};
@@ -126,19 +145,30 @@ export default function App() {
   const [data, setData]               = useState(initAllData);
   const [loading, setLoading]         = useState(false);
   const [saving, setSaving]           = useState(false);
+  const [saveError, setSaveError]     = useState(null);
+  const [dbError, setDbError]         = useState(null);
   const saveTimerRef = useRef({});
 
   // ── 首次加载：从 Supabase 读取所有数据 ──
   useEffect(() => {
+    if (!supabase) {
+      setDbError("Supabase 未配置：请在部署平台（Vercel/Netlify）的环境变量中设置 VITE_SUPABASE_URL 和 VITE_SUPABASE_ANON_KEY，否则数据无法持久保存。");
+      return;
+    }
     (async () => {
       setLoading(true);
-      const { data: rows } = await supabase.from("monthly_data").select("*");
+      const { data: rows, error } = await supabase.from("monthly_data").select("*");
+      if (error) {
+        setDbError(`数据加载失败：${error.message} — 请检查 Supabase 表是否存在、RLS 策略是否允许匿名读取。`);
+        setLoading(false);
+        return;
+      }
       if (rows?.length) {
         setData(prev => {
           const next = { ...prev };
           rows.forEach(r => {
             if (!next[r.year]) next[r.year] = initYear();
-            next[r.year] = { ...next[r.year], [r.month]: r.row_data };
+            next[r.year] = { ...next[r.year], [r.month]: mergeWithDefault(r.row_data) };
           });
           return next;
         });
@@ -149,13 +179,19 @@ export default function App() {
 
   // ── 防抖自动保存（停止输入1秒后保存）──
   const scheduleSave = (year, month, rowData) => {
+    if (!supabase) return;
     const key = `${year}-${month}`;
     if (saveTimerRef.current[key]) clearTimeout(saveTimerRef.current[key]);
     saveTimerRef.current[key] = setTimeout(async () => {
       setSaving(true);
-      await supabase
+      setSaveError(null);
+      const { error } = await supabase
         .from("monthly_data")
         .upsert({ year, month, row_data: rowData }, { onConflict: "year,month" });
+      if (error) {
+        setSaveError(`保存失败：${error.message}`);
+        console.error("Supabase save error:", error);
+      }
       setSaving(false);
     }, 1000);
   };
@@ -304,17 +340,40 @@ export default function App() {
             <h1 className="text-xl font-bold text-stone-800">🎞️ 初见 · 经营数据看板</h1>
             <p className="text-xs text-stone-400 mt-0.5">漏斗转化 · 目标达成 · 社群健康 · 成本结构 · 净利润 全链路追踪</p>
           </div>
-          {saving && (
-            <div className="flex items-center gap-1.5 bg-amber-100 text-amber-700 text-xs px-3 py-1.5 rounded-full font-medium">
-              <span className="animate-spin">⏳</span> 保存中...
-            </div>
-          )}
-          {!saving && !loading && (
-            <div className="flex items-center gap-1.5 bg-green-100 text-green-700 text-xs px-3 py-1.5 rounded-full font-medium">
-              ✅ 已同步
-            </div>
-          )}
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {saving && (
+              <div className="flex items-center gap-1.5 bg-amber-100 text-amber-700 text-xs px-3 py-1.5 rounded-full font-medium">
+                <span className="animate-spin">⏳</span> 保存中...
+              </div>
+            )}
+            {!saving && !saveError && !dbError && supabase && (
+              <div className="flex items-center gap-1.5 bg-green-100 text-green-700 text-xs px-3 py-1.5 rounded-full font-medium">
+                ✅ 已同步
+              </div>
+            )}
+            {saveError && (
+              <div className="flex items-center gap-1.5 bg-red-100 text-red-700 text-xs px-3 py-1.5 rounded-full font-medium" title={saveError}>
+                ❌ 保存失败
+              </div>
+            )}
+            {!supabase && (
+              <div className="flex items-center gap-1.5 bg-orange-100 text-orange-700 text-xs px-3 py-1.5 rounded-full font-medium">
+                ⚠️ 未连接数据库
+              </div>
+            )}
+          </div>
         </div>
+
+        {/* DB Error Banner */}
+        {dbError && (
+          <div className="bg-red-50 border border-red-200 rounded-2xl px-4 py-3 flex items-start gap-3">
+            <span className="text-xl mt-0.5 flex-shrink-0">🔴</span>
+            <div>
+              <div className="text-sm font-bold text-red-700 mb-1">数据库连接异常 · 数据将在刷新后丢失</div>
+              <div className="text-xs text-red-500 leading-relaxed">{dbError}</div>
+            </div>
+          </div>
+        )}
 
         {/* ── 年份滚动窗口 ── */}
         <div className="bg-white rounded-2xl shadow-sm border border-stone-100 px-4 py-3">
@@ -400,18 +459,18 @@ export default function App() {
           }`}>
             <div className="text-xs opacity-75 mb-1">📱 月私域新增</div>
             <div className="text-xl font-bold">{hasVal(row.jiawei) ? `${n(row.jiawei)} 人` : "—"}</div>
-            <div className="text-xs opacity-60 mt-1">目标 ≥ 30人 {n(row.jiawei) >= 30 ? "✓" : ""}</div>
+            <div className="text-xs opacity-60 mt-1">目标 ≥ 150人 {n(row.jiawei) >= 30 ? "✓" : ""}</div>
           </div>
         </div>
 
         {/* 目标KPI */}
         <Collapsible title="🚦 运营目标达成状态（方案5项核心KPI对照）" defaultOpen={true}>
           <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
-            <GoalCard label="发帖转化率"   actual={calc.fatieRate}  target={40} unit="%" desc="发帖÷到店" />
+            <GoalCard label="发帖转化率"   actual={calc.fatieRate}  target={30} unit="%" desc="发帖÷到店" />
             <GoalCard label="7天内容保留率" actual={calc.baoliuRate} target={70} unit="%" desc="7天保留÷发帖" />
-            <GoalCard label="月新增私域"   actual={hasVal(row.jiawei) ? n(row.jiawei) : null} target={30} unit="人" desc="本月加微人数" />
-            <GoalCard label="社群活跃留存" actual={calc.qunActRate} target={35} unit="%" desc="活跃÷群总人数" />
-            <GoalCard label="老带新月均"   actual={hasVal(row.zhuanjie) ? n(row.zhuanjie) : null} target={5} unit="单" desc="转介绍成单数" />
+            <GoalCard label="月新增私域"   actual={hasVal(row.jiawei) ? n(row.jiawei) : null} target={150} unit="人" desc="本月加微人数" />
+            <GoalCard label="社群活跃留存" actual={calc.qunActRate} target={20} unit="%" desc="活跃÷群总人数" />
+            <GoalCard label="老带新月均"   actual={hasVal(row.zhuanjie) ? n(row.zhuanjie) : null} target={100} unit="单" desc="转介绍成单数" />
           </div>
           <div className="mt-3 flex flex-wrap gap-4 text-xs text-stone-400 justify-center">
             {[
@@ -515,8 +574,8 @@ export default function App() {
                   ))}
                   <div className="bg-amber-50 rounded-xl p-3 space-y-2 text-xs mt-1">
                     {[
-                      {label:"社群活跃留存率",val:calc.qunActPct,note:"目标≥35%",color:calc.qunActRate!==null&&calc.qunActRate>=35?"text-green-600":"text-orange-500"},
-                      {label:"本月激活KOC数",val:hasVal(row.kocCount)?`${n(row.kocCount)} 位`:"—",note:"建议≥2位/月",color:"text-blue-600"},
+                      {label:"社群活跃留存率",val:calc.qunActPct,note:"目标≥20%",color:calc.qunActRate!==null&&calc.qunActRate>=35?"text-green-600":"text-orange-500"},
+                      {label:"本月激活KOC数",val:hasVal(row.kocCount)?`${n(row.kocCount)} 位`:"—",note:"建议≥5位/月",color:"text-blue-600"},
                       {label:"小红书发帖",val:hasVal(row.xiaohongshu)?`${n(row.xiaohongshu)} 篇`:"—",note:"",color:"text-rose-500"},
                       {label:"抖音发帖",val:hasVal(row.douyin)?`${n(row.douyin)} 篇`:"—",note:"",color:"text-stone-600"},
                     ].map(item=>(
@@ -643,7 +702,7 @@ export default function App() {
               <h3 className="text-sm font-semibold text-stone-700 mb-3">🎯 全链路转化率</h3>
               <div className="space-y-2">
                 {[
-                  {label:"发帖转化率",  val:calc.fatiePct,      sub:"发帖÷到店",    target:"≥40%", warn:calc.warnFatie},
+                  {label:"发帖转化率",  val:calc.fatiePct,      sub:"发帖÷到店",    target:"≥30%", warn:calc.warnFatie},
                   {label:"7天保留率",   val:calc.baoliuPct,     sub:"7天保留÷发帖", target:"≥70%", warn:calc.warnBaoliu},
                   {label:"加微率",      val:calc.jiawei_pct,    sub:"加微÷到店",    target:null,   warn:false},
                   {label:"进群率",      val:calc.jinqun_pct,    sub:"进群÷加微",    target:null,   warn:false},
@@ -662,15 +721,15 @@ export default function App() {
               </div>
             </div>
 
+            {/* ── 成本 & ROI 模型（已移除重复的客单价）── */}
             <div className="bg-gradient-to-br from-stone-800 to-stone-900 rounded-2xl p-4 text-white">
               <h3 className="text-sm font-semibold mb-3">💰 成本 & ROI 模型</h3>
               <div className="grid grid-cols-2 gap-2">
                 {[
-                  {label:"单篇UGC成本",  val:calc.ugcCost,  sub:"变动÷发帖数",   high:false},
-                  {label:"私域获客成本",  val:calc.privCost, sub:"变动÷加微数",   high:false},
-                  {label:"单笔成交成本",  val:calc.dealCost, sub:"变动÷成交数",   high:false},
-                  {label:"变动成本占比",  val:calc.varRatio, sub:"建议控制≤5%",   high:calc.varHigh},
-                  {label:"客单价",        val:calc.aov,      sub:"营收÷成交人数", high:false},
+                  {label:"单篇UGC成本",  val:calc.ugcCost,  sub:"变动÷发帖数",  high:false},
+                  {label:"私域获客成本",  val:calc.privCost, sub:"变动÷加微数",  high:false},
+                  {label:"单笔成交成本",  val:calc.dealCost, sub:"变动÷成交数",  high:false},
+                  {label:"变动成本占比",  val:calc.varRatio, sub:"建议控制≤5%",  high:calc.varHigh},
                 ].map(item=>(
                   <div key={item.label} className={`rounded-xl p-3 ${item.high?"bg-red-500 bg-opacity-40":"bg-white bg-opacity-10"}`}>
                     <div className="text-base font-bold">{item.val}</div>
