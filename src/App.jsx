@@ -1,8 +1,14 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
+import { createClient } from "@supabase/supabase-js";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
   LineChart, Line, CartesianGrid,
 } from "recharts";
+
+const supabase = createClient(
+  import.meta.env.VITE_SUPABASE_URL,
+  import.meta.env.VITE_SUPABASE_ANON_KEY
+);
 
 const CURRENT_YEAR = new Date().getFullYear();
 const WINDOW_SIZE = 5;
@@ -24,7 +30,6 @@ const DEFAULT_FIXED_COSTS = [
   { id:5, name:"其他固定支出", desc:"其他月度固定费用",     amount:"" },
 ];
 
-// ── hege 已完整移除 ──
 const FUNNEL_FIELDS = [
   { key:"daodian",   label:"到店人数",   color:"bg-amber-600" },
   { key:"fatie",     label:"发帖人数",   color:"bg-amber-500" },
@@ -119,6 +124,41 @@ export default function App() {
   const [activeMonth, setActiveMonth] = useState(now.getMonth());
   const [section, setSection]         = useState("funnel");
   const [data, setData]               = useState(initAllData);
+  const [loading, setLoading]         = useState(false);
+  const [saving, setSaving]           = useState(false);
+  const saveTimerRef = useRef({});
+
+  // ── 首次加载：从 Supabase 读取所有数据 ──
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
+      const { data: rows } = await supabase.from("monthly_data").select("*");
+      if (rows?.length) {
+        setData(prev => {
+          const next = { ...prev };
+          rows.forEach(r => {
+            if (!next[r.year]) next[r.year] = initYear();
+            next[r.year] = { ...next[r.year], [r.month]: r.row_data };
+          });
+          return next;
+        });
+      }
+      setLoading(false);
+    })();
+  }, []);
+
+  // ── 防抖自动保存（停止输入1秒后保存）──
+  const scheduleSave = (year, month, rowData) => {
+    const key = `${year}-${month}`;
+    if (saveTimerRef.current[key]) clearTimeout(saveTimerRef.current[key]);
+    saveTimerRef.current[key] = setTimeout(async () => {
+      setSaving(true);
+      await supabase
+        .from("monthly_data")
+        .upsert({ year, month, row_data: rowData }, { onConflict: "year,month" });
+      setSaving(false);
+    }, 1000);
+  };
 
   const visibleYears = Array.from({ length: WINDOW_SIZE }, (_, i) => windowStart + i);
 
@@ -140,37 +180,40 @@ export default function App() {
   const row = data[activeYear]?.[activeMonth] ?? defaultRow();
 
   const setField = (key, val) =>
-    setData(prev => ({
-      ...prev,
-      [activeYear]: {
-        ...prev[activeYear],
-        [activeMonth]: { ...prev[activeYear][activeMonth], [key]: val },
-      },
-    }));
+    setData(prev => {
+      const newRow = { ...prev[activeYear][activeMonth], [key]: val };
+      scheduleSave(activeYear, activeMonth, newRow);
+      return {
+        ...prev,
+        [activeYear]: { ...prev[activeYear], [activeMonth]: newRow },
+      };
+    });
 
   const setReward = (id, field, val) =>
-    setData(prev => ({
-      ...prev,
-      [activeYear]: {
-        ...prev[activeYear],
-        [activeMonth]: {
-          ...prev[activeYear][activeMonth],
-          rewards: prev[activeYear][activeMonth].rewards.map(r => r.id === id ? { ...r, [field]: val } : r),
-        },
-      },
-    }));
+    setData(prev => {
+      const newRow = {
+        ...prev[activeYear][activeMonth],
+        rewards: prev[activeYear][activeMonth].rewards.map(r => r.id === id ? { ...r, [field]: val } : r),
+      };
+      scheduleSave(activeYear, activeMonth, newRow);
+      return {
+        ...prev,
+        [activeYear]: { ...prev[activeYear], [activeMonth]: newRow },
+      };
+    });
 
   const setFixed = (id, val) =>
-    setData(prev => ({
-      ...prev,
-      [activeYear]: {
-        ...prev[activeYear],
-        [activeMonth]: {
-          ...prev[activeYear][activeMonth],
-          fixedCosts: prev[activeYear][activeMonth].fixedCosts.map(f => f.id === id ? { ...f, amount: val } : f),
-        },
-      },
-    }));
+    setData(prev => {
+      const newRow = {
+        ...prev[activeYear][activeMonth],
+        fixedCosts: prev[activeYear][activeMonth].fixedCosts.map(f => f.id === id ? { ...f, amount: val } : f),
+      };
+      scheduleSave(activeYear, activeMonth, newRow);
+      return {
+        ...prev,
+        [activeYear]: { ...prev[activeYear], [activeMonth]: newRow },
+      };
+    });
 
   const calc = useMemo(() => {
     const r = row;
@@ -242,14 +285,35 @@ export default function App() {
     { key:"fixed",     label:"🏪 固定" },
   ];
 
+  if (loading) return (
+    <div className="min-h-screen bg-amber-50 flex items-center justify-center">
+      <div className="text-center">
+        <div className="text-4xl mb-4">🎞️</div>
+        <div className="text-stone-500 text-sm font-medium">数据加载中...</div>
+      </div>
+    </div>
+  );
+
   return (
     <div className="min-h-screen bg-amber-50 p-3 font-sans">
       <div className="max-w-5xl mx-auto space-y-4">
 
         {/* Header */}
-        <div className="pt-1">
-          <h1 className="text-xl font-bold text-stone-800">🎞️ 初见 · 经营数据看板</h1>
-          <p className="text-xs text-stone-400 mt-0.5">漏斗转化 · 目标达成 · 社群健康 · 成本结构 · 净利润 全链路追踪</p>
+        <div className="pt-1 flex justify-between items-start">
+          <div>
+            <h1 className="text-xl font-bold text-stone-800">🎞️ 初见 · 经营数据看板</h1>
+            <p className="text-xs text-stone-400 mt-0.5">漏斗转化 · 目标达成 · 社群健康 · 成本结构 · 净利润 全链路追踪</p>
+          </div>
+          {saving && (
+            <div className="flex items-center gap-1.5 bg-amber-100 text-amber-700 text-xs px-3 py-1.5 rounded-full font-medium">
+              <span className="animate-spin">⏳</span> 保存中...
+            </div>
+          )}
+          {!saving && !loading && (
+            <div className="flex items-center gap-1.5 bg-green-100 text-green-700 text-xs px-3 py-1.5 rounded-full font-medium">
+              ✅ 已同步
+            </div>
+          )}
         </div>
 
         {/* ── 年份滚动窗口 ── */}
