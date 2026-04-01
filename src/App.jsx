@@ -910,7 +910,7 @@ export default function App() {
         </Collapsible>
 
         <div className="text-center text-xs text-stone-400 py-4 border-t border-stone-200 mt-2 leading-relaxed">
-          🔒 本看板为「CCD实体店 · 经营数据看板」内部专用，数据涉及商业机密，<br/>
+          🔒 本看板为「初见 · 经营数据看板」内部专用，数据涉及商业机密，<br/>
           严禁截图或以任何形式对外泄露，违者将依法承担相应法律责任。
         </div>
       </div>
