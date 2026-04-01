@@ -178,7 +178,7 @@ export default function App() {
   }, []);
 
   // ── 防抖自动保存（停止输入1秒后保存）──
-  const scheduleSave = (year, idx, rowData) => {
+  const scheduleSave = (year, month, rowData) => {
     if (!supabase) return;
     const key = `${year}-${month}`;
     if (saveTimerRef.current[key]) clearTimeout(saveTimerRef.current[key]);
@@ -187,7 +187,7 @@ export default function App() {
       setSaveError(null);
       const { error } = await supabase
         .from("monthly_data")
-        .upsert({ year, month_index: month, row_data: rowData }, { onConflict: "year,month_index" });
+        .upsert({ year, month, row_data: rowData }, { onConflict: "year,month" });
       if (error) {
         setSaveError(`保存失败：${error.message}`);
         console.error("Supabase save error:", error);
@@ -308,9 +308,9 @@ export default function App() {
 
   const warns = [
     calc.warnVar     && { lvl:"red",    title:"变动成本预警",      msg:`变动成本占比 ${calc.varRatio}，已超建议上限5%` },
-    calc.warnFatie   && { lvl:"orange", title:"发帖转化率偏低",    msg:`当前 ${calc.fatiePct}，目标≥40%，建议优化店员引导话术` },
+    calc.warnFatie   && { lvl:"orange", title:"发帖转化率偏低",    msg:`当前 ${calc.fatiePct}，目标≥30%，建议优化店员引导话术` },
     calc.warnBaoliu  && { lvl:"orange", title:"7天内容保留率偏低", msg:`当前 ${calc.baoliuPct}，目标≥70%，建议加强发帖跟进` },
-    calc.warnPrivate && { lvl:"yellow", title:"月新增私域不足",    msg:`本月加微 ${n(row.jiawei)} 人，目标≥30人` },
+    calc.warnPrivate && { lvl:"yellow", title:"月新增私域不足",    msg:`本月加微 ${n(row.jiawei)} 人，目标≥150人` },
   ].filter(Boolean);
 
   const TABS = [
