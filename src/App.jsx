@@ -178,7 +178,7 @@ export default function App() {
   }, []);
 
   // ── 防抖自动保存（停止输入1秒后保存）──
-  const scheduleSave = (year, month, rowData) => {
+  const scheduleSave = (year, idx, rowData) => {
     if (!supabase) return;
     const key = `${year}-${month}`;
     if (saveTimerRef.current[key]) clearTimeout(saveTimerRef.current[key]);
