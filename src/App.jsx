@@ -187,7 +187,7 @@ export default function App() {
       setSaveError(null);
       const { error } = await supabase
         .from("monthly_data")
-        .upsert({ year, month, row_data: rowData }, { onConflict: "year,month_index" });
+        .upsert({ year, month_index: month, row_data: rowData }, { onConflict: "year,month_index" });
       if (error) {
         setSaveError(`保存失败：${error.message}`);
         console.error("Supabase save error:", error);
